@@ -165,13 +165,20 @@ void readSensors(){
   SensorData.vAIN = ads.computeVolts(SensorData.AIN);
 
   //Ultrasonic
-  SensorData.USDistance = ultrasonic.read();
+  SensorData.USDistance = (float)(ultrasonic.read()*pow(10,6)/speedOfSoundUsedByI2Cmode);
+  //SensorData.USDistance = ultrasonic.read();
 
   //Beep and flash LED to confirm sample taken
   digitalWrite(LED_PIN, HIGH);
  // tone(BUZZER_PIN, 600, 15);
   delay(50);
   digitalWrite(LED_PIN, LOW);
+
+}
+
+float ultrasonic_transfer(float temperature, float )
+{
+  return -1;
 
 }
 
