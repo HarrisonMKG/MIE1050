@@ -1,9 +1,11 @@
 #include <SPI.h>              // SPI library
 #include <Adafruit_GFX.h>     // Core graphics library
 #include <Adafruit_Sensor.h>  // Core sensor library
+#include <Adafruit_ST7789.h>  // Hardware-specific library for ST7789
 #include <Adafruit_ADS1X15.h> // Hardware-specific library for ADS1x15
 #include "Adafruit_BME680.h"  // Hardware-specific library for BME680
 #include <Fonts/FreeSerif9pt7b.h> //Font to be used on the display
+#include "SparkFun_BMA400_Arduino_Library.h" //Hardware-specific library for BMA400
 #include <RCWL_1X05.h> //Hardware-specific library for Ultrasonic Sensor
 
 //Pin Definitions
@@ -26,6 +28,7 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 //Location In Memory to store Sensor Objects
 Adafruit_BME680 bme;
 Adafruit_ADS1015 ads;
+BMA400 accelerometer;
 RCWL_1X05 ultrasonic;
 
 //Location In Memory to Store Sensor Results (Stored inside a Struct)
@@ -38,6 +41,20 @@ struct SensorResults {
   float P;
   float G;
   float Alt;
+  //BMA Results 
+  float Xg;
+  float Yg;
+  float Zg;
+  //ADC Results Raw
+  int16_t Mic;
+  int16_t EMF;
+  int16_t Light;
+  int16_t AIN;
+  //ADC Results Converted to Volts
+  float vMic;
+  float vEMF;
+  float vLight;
+  float vAIN;
   //Ultrasonic Sensor Pulse TTR
   float USDistance;
 };
@@ -52,6 +69,7 @@ void setup() {
 
   //Init Buzzer and LED GPIO
   digitalWrite(LED_PIN, LOW); //Turn off before setting to output to prevent flickering at boot
+  digitalWrite(BUZZER_PIN, LOW);
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
 
@@ -99,9 +117,9 @@ void setup() {
   }
 
   //Init Ultrasonic Sensor
-  if (!.begin(&Wire1)) {
+  if (!ultrasonic.begin(&Wire1)) {
     Serial.println("Sensor not found. Check connections and I2C-pullups and restart sketch.");
-  } else {ultrasonic
+  } else {
     Serial.println("Sensor ready, let's start\n\n");
     ultrasonic.setMode(RCWL_1X05::oneShot); // not really needed, it's the default mode
   }
@@ -121,28 +139,40 @@ void readSensors(){
     Serial.println("Failed to perform reading :(");
     return;
   }
-
   SensorData.T = bme.temperature;
   SensorData.RH = bme.humidity;
   SensorData.P = bme.pressure/1000;
   SensorData.G = bme.gas_resistance/1000;
-
   SensorData.Alt = bme.readAltitude(SEALEVELPRESSURE_HPA);
+
+  //Read BME and store in struct
+  accelerometer.getSensorData();
+
+  SensorData.Xg = accelerometer.data.accelX;
+  SensorData.Yg = accelerometer.data.accelY;
+  SensorData.Zg = accelerometer.data.accelZ;
+
+  //Read ADC and store in Struct a raw value
+  SensorData.Mic = ads.readADC_SingleEnded(0);
+  SensorData.EMF = ads.readADC_SingleEnded(1);
+  SensorData.Light = ads.readADC_SingleEnded(2);
+  SensorData.AIN = ads.readADC_SingleEnded(3);
+  
+  //Convert Values to volts and store that
+  SensorData.vMic = ads.computeVolts(SensorData.Mic);
+  SensorData.vEMF = ads.computeVolts(SensorData.EMF);
+  SensorData.vLight = ads.computeVolts(SensorData.Light);
+  SensorData.vAIN = ads.computeVolts(SensorData.AIN);
 
   //Ultrasonic
   SensorData.USDistance = ultrasonic.read();
-  ultrasonic_transfer(SensorData.USDistance,SensorData.T,SensorData.RH,SensorData.P);
 
   //Beep and flash LED to confirm sample taken
   digitalWrite(LED_PIN, HIGH);
+ // tone(BUZZER_PIN, 600, 15);
   delay(50);
   digitalWrite(LED_PIN, LOW);
 
-}
-
-void ultrasonic_transfer(float raw_signal, float temperature, float humidity, float pressure)
-{
-  return;
 }
 
 void printSensors(){
@@ -152,8 +182,18 @@ void printSensors(){
   Serial.printf("Temp:  %f °C\n", SensorData.T);
   Serial.printf("Hum:   %f %%\n", SensorData.RH);
   Serial.printf("Pres:  %f kPa\n", SensorData.P);
+  Serial.printf("Gas:   %f KOhms\n", SensorData.G);
+  Serial.printf("Alt:   %f m (Estimated)\n", SensorData.Alt);
 
-  Serial.printf("US RAW:    %f ns\n", SensorData.USDistance);
+  Serial.printf("Xg:    %f g\n", SensorData.Xg);
+  Serial.printf("Yg:    %f g\n", SensorData.Yg);
+  Serial.printf("Zg:    %f g\n", SensorData.Zg);
+
+  Serial.printf("Mic:   %d (%f V)\n", SensorData.Mic, SensorData.vMic);
+  Serial.printf("EMF:   %d (%f V)\n", SensorData.EMF, SensorData.vEMF);
+  Serial.printf("Light: %d (%f V)\n", SensorData.Light, SensorData.vLight);
+  Serial.printf("AIN:   %d (%f V)\n", SensorData.AIN, SensorData.vAIN);
+
   Serial.printf("US:    %f mm\n", SensorData.USDistance);
 }
 
@@ -208,6 +248,16 @@ void updateDisplay(){
   sprintf(tempStringSorage, "P: %3.1f kPa\n", SensorData.P);
   tft.print(tempStringSorage);
 
+  tft.setCursor(COLLUMN_ONE_X,80);
+  memset(tempStringSorage, 0, sizeof(tempStringSorage));
+  sprintf(tempStringSorage, "G: %3.0fkOhm\n", SensorData.G);
+  tft.print(tempStringSorage);
+
+  tft.setCursor(COLLUMN_ONE_X,95);
+  memset(tempStringSorage, 0, sizeof(tempStringSorage));
+  sprintf(tempStringSorage, "A: %3.1f m\n", SensorData.Alt);
+  tft.print(tempStringSorage);
+
   //USS to Screen
   tft.setCursor(COLLUMN_ONE_X,113);
   tft.setTextColor(TITLE_COLOUR);
@@ -216,5 +266,45 @@ void updateDisplay(){
   tft.setCursor(COLLUMN_ONE_X,128);
   memset(tempStringSorage, 0, sizeof(tempStringSorage));
   sprintf(tempStringSorage, "%5.0f mm\n", SensorData.USDistance);
+  tft.print(tempStringSorage);
+
+  //Write BMA400 Values to Screen
+  tft.setCursor(COLLUMN_TWO_X,83);
+  tft.setTextColor(TITLE_COLOUR);
+  tft.print("BMA400\n");
+  tft.setTextColor(VALUE_COLOUR);
+
+  tft.setCursor(COLLUMN_TWO_X,98);
+  sprintf(tempStringSorage, "X: %2.3f g\n", SensorData.Xg);
+  tft.print(tempStringSorage);
+
+  tft.setCursor(COLLUMN_TWO_X,113);
+  memset(tempStringSorage, 0, sizeof(tempStringSorage));
+  sprintf(tempStringSorage, "Y: %2.3f g\n", SensorData.Yg);
+  tft.print(tempStringSorage);
+
+  tft.setCursor(COLLUMN_TWO_X,128);
+  memset(tempStringSorage, 0, sizeof(tempStringSorage));
+  sprintf(tempStringSorage, "Z: %2.3f g\n", SensorData.Zg);
+  tft.print(tempStringSorage);
+
+  //Write ADC Values to Screen
+  tft.setCursor(COLLUMN_TWO_X,14);
+  sprintf(tempStringSorage, "M: %2.3fV\n", SensorData.vMic);
+  tft.print(tempStringSorage);
+
+  tft.setCursor(COLLUMN_TWO_X,32);
+  memset(tempStringSorage, 0, sizeof(tempStringSorage));
+  sprintf(tempStringSorage, "E: %2.3fV\n", SensorData.vEMF);
+  tft.print(tempStringSorage);
+
+  tft.setCursor(COLLUMN_TWO_X,48);
+  memset(tempStringSorage, 0, sizeof(tempStringSorage));
+  sprintf(tempStringSorage, "L: %2.3fV\n", SensorData.vLight);
+  tft.print(tempStringSorage);
+
+  tft.setCursor(COLLUMN_TWO_X,64);
+  memset(tempStringSorage, 0, sizeof(tempStringSorage));
+  sprintf(tempStringSorage, "A: %2.3fV\n", SensorData.vAIN);
   tft.print(tempStringSorage);
 }
